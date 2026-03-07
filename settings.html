@@ -13,9 +13,36 @@
             </div>
 
             <!-- Checkpoint -->
-            <div class="flex-container flexGap5 alignItemsCenter">
+            <div>
                 <label for="comfyinject_checkpoint">Checkpoint</label>
-                <input id="comfyinject_checkpoint" type="text" class="text_pole" placeholder="your_model.safetensors" />
+                <div style="position: relative; margin-top: 4px;">
+                    <div class="flex-container flexGap5 alignItemsCenter">
+                        <input id="comfyinject_checkpoint" type="text" class="text_pole" placeholder="your_model.safetensors" style="flex: 1;" />
+                        <div id="comfyinject_checkpoint_arrow" class="menu_button" title="Show available checkpoints" style="padding: 2px 8px; cursor: pointer;">
+                            <i class="fa-solid fa-caret-down"></i>
+                        </div>
+                    </div>
+                    <div id="comfyinject_checkpoint_dropdown" style="display: none; position: absolute; z-index: 999; width: 100%; max-height: 200px; overflow-y: auto; background: var(--SmartThemeBlurTintColor); border: 1px solid var(--SmartThemeBorderColor); border-radius: 4px; margin-top: 2px;">
+                        <!-- Populated by ui.js -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Workflow -->
+            <div>
+                <label for="comfyinject_workflow">Workflow</label>
+                <small style="display: block; margin-bottom: 4px;">Filename of the workflow JSON in the workflows folder.</small>
+                <input id="comfyinject_workflow" type="text" class="text_pole" placeholder="comfyinject_default.json" />
+            </div>
+
+            <hr class="sysHR" />
+
+            <!-- Gallery Button -->
+            <div class="flex-container flexGap5">
+                <div id="comfyinject_gallery_btn" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-images"></i>
+                    <span>Image Gallery</span>
+                </div>
             </div>
 
             <hr class="sysHR" />
@@ -33,11 +60,25 @@
 
                 <hr class="sysHR" />
 
+                <!-- Prepend Prompt -->
+                <div class="flex-container flexGap5 alignItemsCenter">
+                    <label for="comfyinject_prepend_prompt">Prepend Prompt</label>
+                    <textarea id="comfyinject_prepend_prompt" class="text_pole" rows="2" placeholder="Tags to prepend before the LLM's prompt"></textarea>
+                </div>
+                <small>This will be the very first thing in the positive prompt, before shot tags and the LLM's output.</small>
+
                 <!-- Negative Prompt -->
                 <div class="flex-container flexGap5 alignItemsCenter">
                     <label for="comfyinject_negative_prompt">Negative Prompt</label>
                     <textarea id="comfyinject_negative_prompt" class="text_pole" rows="3"></textarea>
                 </div>
+
+                <!-- Append Prompt -->
+                <div class="flex-container flexGap5 alignItemsCenter">
+                    <label for="comfyinject_append_prompt">Append Prompt</label>
+                    <textarea id="comfyinject_append_prompt" class="text_pole" rows="2" placeholder="Tags to append after the LLM's prompt"></textarea>
+                </div>
+                <small>This will be the very last thing in the positive prompt, after the LLM's output.</small>
 
                 <!-- Sampler Settings -->
                 <div class="flex-container flexGap5 alignItemsCenter">
@@ -76,8 +117,42 @@
                 </div>
 
                 <div id="comfyinject_resolutions_block" style="display:none;">
-                    <small>Width × Height in pixels for each AR token.</small>
+                    <small>Width &times; Height in pixels for each AR token.</small>
                     <br />
+
+                    <!-- Resolution Lock -->
+                    <div class="flex-container flexGap5 alignItemsCenter" style="margin: 8px 0;">
+                        <label class="checkbox_label" for="comfyinject_resolution_lock_enabled" title="Ignore the LLM's AR token and use one fixed resolution for all generations.">
+                            <input id="comfyinject_resolution_lock_enabled" type="checkbox" />
+                            <span>Lock Resolution</span>
+                        </label>
+                    </div>
+                    <div id="comfyinject_resolution_lock_inputs" style="display:none; margin-bottom: 8px;">
+                        <small>All generations will use this resolution regardless of AR token.</small>
+                        <div class="flex-container flexGap5 alignItemsCenter" style="margin-top: 4px;">
+                            <label style="width: 80px;">LOCKED</label>
+                            <input
+                                type="number"
+                                id="comfyinject_resolution_lock_width"
+                                class="text_pole"
+                                min="64"
+                                max="2048"
+                                step="64"
+                                style="width: 70px;"
+                            />
+                            <span>&times;</span>
+                            <input
+                                type="number"
+                                id="comfyinject_resolution_lock_height"
+                                class="text_pole"
+                                min="64"
+                                max="2048"
+                                step="64"
+                                style="width: 70px;"
+                            />
+                        </div>
+                    </div>
+
                     <div id="comfyinject_resolutions">
                         <!-- Populated by ui.js -->
                     </div>
@@ -96,8 +171,71 @@
                 <div id="comfyinject_shot_tags_block" style="display:none;">
                     <small>Danbooru tags prepended to the prompt for each SHOT token.</small>
                     <br />
+
+                    <!-- Shot Lock -->
+                    <div class="flex-container flexGap5 alignItemsCenter" style="margin: 8px 0;">
+                        <label class="checkbox_label" for="comfyinject_shot_lock_enabled" title="Ignore the LLM's SHOT token and use one fixed shot type for all generations.">
+                            <input id="comfyinject_shot_lock_enabled" type="checkbox" />
+                            <span>Lock Shot</span>
+                        </label>
+                    </div>
+                    <div id="comfyinject_shot_lock_inputs" style="display:none; margin-bottom: 8px;">
+                        <small>All generations will use this shot type regardless of SHOT token.</small>
+                        <div class="flex-container flexGap5 alignItemsCenter" style="margin-top: 4px;">
+                            <label style="width: 80px;">LOCKED</label>
+                            <select id="comfyinject_shot_lock_value" class="text_pole" style="width: 150px;">
+                                <!-- Populated by ui.js -->
+                            </select>
+                        </div>
+                    </div>
+
                     <div id="comfyinject_shot_tags">
                         <!-- Populated by ui.js -->
+                    </div>
+                </div>
+
+                <hr class="sysHR" />
+
+                <!-- Seed Lock Toggle -->
+                <div class="flex-container flexGap5">
+                    <div id="comfyinject_seed_lock_toggle" class="menu_button menu_button_icon">
+                        <i class="fa-solid fa-dice"></i>
+                        <span>Seed Control</span>
+                    </div>
+                </div>
+
+                <div id="comfyinject_seed_lock_block" style="display:none;">
+                    <small>Override the LLM's SEED token with a fixed seed mode.</small>
+                    <br />
+
+                    <!-- Seed Lock -->
+                    <div class="flex-container flexGap5 alignItemsCenter" style="margin: 8px 0;">
+                        <label class="checkbox_label" for="comfyinject_seed_lock_enabled" title="Ignore the LLM's SEED token and use a fixed seed mode for all generations.">
+                            <input id="comfyinject_seed_lock_enabled" type="checkbox" />
+                            <span>Lock Seed</span>
+                        </label>
+                    </div>
+                    <div id="comfyinject_seed_lock_inputs" style="display:none; margin-bottom: 8px;">
+                        <div class="flex-container flexGap5 alignItemsCenter" style="margin-top: 4px;">
+                            <label style="width: 80px;">Mode</label>
+                            <select id="comfyinject_seed_lock_mode" class="text_pole" style="width: 150px;">
+                                <option value="RANDOM">RANDOM</option>
+                                <option value="LOCK">LOCK</option>
+                                <option value="CUSTOM">CUSTOM</option>
+                            </select>
+                        </div>
+                        <div id="comfyinject_seed_lock_custom_input" class="flex-container flexGap5 alignItemsCenter" style="margin-top: 4px; display:none;">
+                            <label style="width: 80px;">Seed</label>
+                            <input
+                                type="number"
+                                id="comfyinject_seed_lock_value"
+                                class="text_pole"
+                                min="0"
+                                max="4294967295"
+                                step="1"
+                                style="width: 150px;"
+                            />
+                        </div>
                     </div>
                 </div>
 

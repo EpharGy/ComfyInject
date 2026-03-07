@@ -4,7 +4,7 @@
 
 A SillyTavern extension that automatically generates images from `[[IMG: ... ]]` markers in bot messages using your local ComfyUI instance.
 
-When your LLM outputs a marker, ComfyInject intercepts it, sends the prompt to ComfyUI, and replaces the marker with the generated image — all without leaving the chat. Images are saved permanently into the chat history and survive page reloads. Outbound prompts sent to the LLM replace injected images with a compact token so the model maintains visual continuity across the conversation.
+When your LLM outputs a marker, ComfyInject intercepts it, sends the prompt to ComfyUI, and replaces the marker with the generated image — all without leaving the chat. Multiple images per message are supported. Images are saved permanently into the chat history and survive page reloads. Outbound prompts sent to the LLM replace injected images with a compact token so the model maintains visual continuity across the conversation.
 
 <details>
   <summary>Table of Contents</summary>
@@ -22,6 +22,8 @@ When your LLM outputs a marker, ComfyInject intercepts it, sends the prompt to C
     <li><a href="#configuration">Configuration</a></li>
     <li><a href="#marker-format">Marker Format</a></li>
     <li><a href="#system-prompt">System Prompt</a></li>
+    <li><a href="#image-gallery">Image Gallery</a></li>
+    <li><a href="#retry-button">Retry Button</a></li>
     <li><a href="#custom-workflows">Custom Workflows</a></li>
     <li><a href="#how-it-works">How It Works</a></li>
     <li><a href="#known-limitations">Known Limitations</a></li>
@@ -101,7 +103,7 @@ python main.py --enable-cors-header
 Before ComfyInject can generate anything, two settings **must** be configured. Open the Extensions panel in SillyTavern, find ComfyInject, and set:
 
 - **ComfyUI Host** — the URL of your ComfyUI instance. Default is `http://127.0.0.1:8188` which is correct for most local installs. Change this if you're running ComfyUI on a different port or machine.
-- **Checkpoint** — the filename of your model **exactly** as it appears in ComfyUI's model list and model folder. Example: `waiIllustriousSDXL_v160.safetensors`. Not sure where to find this? See the [FAQ](#how-do-i-find-my-checkpoint-filename-in-comfyui).
+- **Checkpoint** — the filename of your model **exactly** as it appears in ComfyUI's model list and model folder. Example: `waiIllustriousSDXL_v160.safetensors`. You can click the dropdown arrow next to the text field to fetch and select from your available checkpoints directly. Not sure where to find this? See the [FAQ](#how-do-i-find-my-checkpoint-filename-in-comfyui).
 
 All other settings have sensible defaults and don't need to be changed to get started. See the [Configuration](#configuration) section for the full list.
 
@@ -120,24 +122,52 @@ ComfyInject won't generate anything unless your LLM knows to output the `[[IMG: 
 
 ## Configuration
 
-All settings are available in the Extensions panel in SillyTavern under **ComfyInject**. The two required settings are visible immediately. Everything else is under **Advanced Settings**.
+All settings are available in the Extensions panel in SillyTavern under **ComfyInject**. The required settings are visible immediately. Everything else is under **Advanced Settings**.
+
+### Connection & Model
 
 | Setting | Description |
 |---|---|
 | `ComfyUI Host` | URL of your ComfyUI instance. Default: `http://127.0.0.1:8188` |
-| `Checkpoint` | Filename of your model as it appears in ComfyUI. Must match exactly. |
+| `Checkpoint` | Filename of your model as it appears in ComfyUI. Must match exactly. Click the dropdown arrow to fetch available checkpoints. |
+| `Workflow` | Filename of the workflow JSON in the `workflows/` folder. Default: `comfyinject_default.json`. Validated automatically after you stop typing. |
+
+### Prompt Control
+
+| Setting | Description |
+|---|---|
+| `Prepend Prompt` | Custom tags added to the **start** of every positive prompt, before shot tags and the LLM's output. |
 | `Negative Prompt` | Negative prompt applied to every generation. |
+| `Append Prompt` | Custom tags added to the **end** of every positive prompt, after the LLM's output. |
+
+### Sampler Settings
+
+| Setting | Description |
+|---|---|
 | `Steps` | Number of sampling steps. |
 | `CFG` | Classifier-Free Guidance scale. |
 | `Sampler` | Sampler name (must be valid in your ComfyUI version). |
 | `Scheduler` | Scheduler name (must be valid in your ComfyUI version). |
 | `Denoise` | Denoise strength (1.0 for full generation). |
+
+### Resolution & Locks
+
+| Setting | Description |
+|---|---|
 | `Resolutions` | Width/height per AR token. Adjust for your model (SDXL needs higher values). |
-| `Shot Tags` | Danbooru tags prepended to the prompt for each SHOT token. |
+| `Lock Resolution` | When enabled, ignores the LLM's AR token and uses a single fixed resolution for all generations. |
+| `Lock Shot` | When enabled, ignores the LLM's SHOT token and uses a fixed shot type for all generations. |
+| `Lock Seed` | When enabled, ignores the LLM's SEED token. Modes: `RANDOM` (always new), `LOCK` (reuse last message's seed), or `CUSTOM` (specific number). |
 
-> **Note for SDXL users:** Default resolutions are SD1.5 sized (512px). Bump them up — e.g. PORTRAIT to 832×1216.
+### Shot Tags
 
-To reset all advanced settings back to defaults while keeping your host and checkpoint, press the **Reset Advanced to Defaults** button at the bottom of the Advanced Settings panel.
+| Setting | Description |
+|---|---|
+| `Shot Tags` | Danbooru tags prepended to the prompt for each SHOT token. Fully customizable. |
+
+> **Note for SDXL users:** Default resolutions are SD1.5 sized (512px). Bump them up — e.g. PORTRAIT to 832x1216.
+
+To reset all advanced settings back to defaults while keeping your host, checkpoint, and workflow, press the **Reset Advanced to Defaults** button at the bottom of the Advanced Settings panel.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -151,6 +181,8 @@ Instruct your LLM to output image markers using this exact format:
 [[IMG: PROMPT | AR | SHOT | SEED ]]
 ```
 
+Multiple markers per message are supported — each one generates a separate image.
+
 ### Segments
 
 **PROMPT** — Danbooru-style comma-separated tags describing only what a camera would see. Recommended tag order:
@@ -163,10 +195,10 @@ Instruct your LLM to output image markers using this exact format:
 
 | Token | Resolution (default) |
 |---|---|
-| `PORTRAIT` | 512 × 768 |
-| `SQUARE` | 512 × 512 |
-| `LANDSCAPE` | 768 × 512 |
-| `CINEMA` | 768 × 432 |
+| `PORTRAIT` | 512 x 768 |
+| `SQUARE` | 512 x 512 |
+| `LANDSCAPE` | 768 x 512 |
+| `CINEMA` | 768 x 432 |
 
 **SHOT** — Camera shot type. Each token prepends Danbooru tags to the positive prompt automatically:
 
@@ -190,7 +222,7 @@ To change these tags, open the Extensions panel → ComfyInject → **Advanced S
 | Value | Behaviour |
 |---|---|
 | `RANDOM` | Generate a new random seed |
-| `LOCK` | Reuse the last generated seed (visual continuity) |
+| `LOCK` | Reuse the seed from the last saved message (stable across swipes) |
 | integer | Use a specific seed |
 
 ### Example
@@ -206,6 +238,8 @@ To change these tags, open the Extensions panel → ComfyInject → **Advanced S
 ## System Prompt
 
 Add the following to your **Post-History Instructions** (You can also place it in **Author's Note**, **Prompt Content**, or even in your **Summary** if that's what you want!). Placing it there puts it closer to the end of the context window, which gives significantly better format compliance than a top-level system prompt.
+
+The example below tells the LLM to include one image per message. You can change the number to whatever you want, or tell it to include images "when narratively appropriate" for more flexibility.
 
 ```
 IMAGE INJECTION RULES
@@ -256,11 +290,42 @@ Never explain or mention the marker in narration.
 
 ---
 
+## Image Gallery
+
+ComfyInject includes a built-in image gallery accessible from the extension panel. Click the **Image Gallery** button to open it.
+
+The gallery shows all generated images in the current chat as a grid of thumbnails. Each thumbnail displays the seed and message number. Click any image to expand it and see the full details:
+
+- **Seed** — the numeric seed used for generation
+- **Prompt** — the full Danbooru tag prompt the LLM wrote
+- **AR** — the aspect ratio token and actual resolution used (shows `LOCKED` if resolution lock was active)
+- **Shot** — the shot type token and actual tags injected (shows `LOCKED` if shot lock was active)
+- **Filename** — the output filename in ComfyUI's output folder
+- **Prompt ID** — the ComfyUI job ID, clickable as a link to the ComfyUI history endpoint for debugging
+
+The gallery always reflects what's currently on screen — swiping to a different response updates the gallery accordingly.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
+## Retry Button
+
+Every generated image has a small retry button (rotate icon) in the top-right corner. Clicking it regenerates that specific image with a new random seed while keeping the same prompt, aspect ratio, and shot type. The retry button always bypasses the seed lock setting to guarantee a different result.
+
+During regeneration, the button shows a spinning icon. The new image replaces the old one in the chat and is saved permanently.
+
+In messages with multiple images, each retry button only affects its own image — the others are left untouched.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
 ## Custom Workflows
 
 The default workflow (`workflows/comfyinject_default.json`) uses only built-in ComfyUI nodes and works out of the box with any standard checkpoint.
 
-To use your own workflow, see `workflows/README.md` for placeholder requirements.
+To use your own workflow, see `workflows/README.md` for placeholder requirements. Once your workflow JSON is in the `workflows/` folder, type its filename into the **Workflow** field in the extension settings. The field validates automatically — you'll see a success or error notification after you stop typing.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -268,13 +333,14 @@ To use your own workflow, see `workflows/README.md` for placeholder requirements
 
 ## How It Works
 
-1. Bot message arrives containing `[[IMG: ... ]]`
-2. ComfyInject parses the marker and resolves the seed
-3. The workflow is filled with your settings and sent to ComfyUI
-4. ComfyInject polls `/history` until the image is ready
-5. The marker is replaced with an `<img>` tag in the chat permanently
-6. The image URL and prompt are saved to chat metadata
-7. On the next generation, the `<img>` tag is ephemerally replaced with `[[IMG: prompt | seed ]]` in the outbound prompt so the LLM sees a token-efficient reference instead of raw HTML
+1. Bot message arrives containing one or more `[[IMG: ... ]]` markers
+2. ComfyInject parses each marker and resolves seeds, applying any active locks
+3. For each marker, the workflow is filled with your settings and sent to ComfyUI sequentially
+4. ComfyInject polls `/history` until each image is ready
+5. Each marker is replaced with an `<img>` tag in the chat permanently
+6. Image metadata (seed, AR, shot, prompt ID, filename) is saved to chat metadata keyed by message timestamp for stability across deletions
+7. On the next generation, the outbound interceptor replaces `<img>` tags with `[[IMG: prompt | seed ]]` tokens so the LLM sees a compact text reference instead of raw HTML
+8. Retry buttons are injected via DOM manipulation after each render
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -284,7 +350,7 @@ To use your own workflow, see `workflows/README.md` for placeholder requirements
 
 - Images link to your local ComfyUI `/view` endpoint. If ComfyUI is not running on reload, images will not display (the `<img>` tag is saved but the file must be served by ComfyUI).
 - The generating placeholder may not appear on some versions of SillyTavern. This is a cosmetic limitation with no impact on functionality.
-- Only one `[[IMG: ... ]]` marker per message is processed.
+- Deleted messages leave orphaned image files in ComfyUI's output folder. ComfyInject does not delete these files — manage your ComfyUI output folder as needed.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -294,11 +360,13 @@ To use your own workflow, see `workflows/README.md` for placeholder requirements
 
 ### How do I find my checkpoint filename in ComfyUI?
 
-Open your ComfyUI root folder and navigate to `ComfyUI/models/checkpoints`. The filenames of the models in that folder are exactly what you need to paste into ComfyInject's Checkpoint field, including the file extension (e.g. `waiIllustriousSDXL_v160.safetensors`).
+The easiest way is to click the dropdown arrow next to the Checkpoint field in ComfyInject's settings — if ComfyUI is running, it will fetch and display all your available checkpoints for you to select from.
 
-Alternatively, open ComfyUI, load any workflow, and find the Load Checkpoint node. Click the dropdown on that node and you'll see a list of all your available models. Note down whichever one you want and type it exactly into ComfyInject's Checkpoint field.
+Alternatively, open your ComfyUI root folder and navigate to `ComfyUI/models/checkpoints`. The filenames of the models in that folder are exactly what you need to paste into ComfyInject's Checkpoint field, including the file extension (e.g. `waiIllustriousSDXL_v160.safetensors`).
 
-If the checkpoints folder is empty, you'll need to download a model first. SD1.5 is a good beginner friendly starting point. You can find models on Hugging Face or Civitai. Once downloaded, drop it into the checkpoints folder and restart ComfyUI. 
+You can also find it in ComfyUI itself — open ComfyUI, load any workflow, and find the Load Checkpoint node. Click the dropdown on that node and you'll see a list of all your available models. Note down whichever one you want and type it exactly into ComfyInject's Checkpoint field.
+
+If the checkpoints folder is empty or the dropdown shows nothing, you'll need to download a model first. SD1.5 is a good beginner friendly starting point. You can find models on Hugging Face or Civitai. Once downloaded, drop the model file into the `ComfyUI/models/checkpoints` folder and restart ComfyUI. After that, the model should appear in both ComfyUI and ComfyInject's dropdown.
 
 ---
 
@@ -312,7 +380,7 @@ With ComfyInject the LLM writes the image prompt directly into its response, con
 
 ### Can I use my own custom workflow?
 
-Yes! Export your workflow from ComfyUI using Save (API format), replace the relevant values with ComfyInject's placeholder strings, and save it to the `workflows/` folder. See `workflows/README.md` for the full list of placeholders and instructions. ComfyInject only touches the nodes where you place its placeholders — everything else in your workflow stays exactly as you have it.
+Yes! Export your workflow from ComfyUI using Save (API format), replace the relevant values with ComfyInject's placeholder strings, and save it to the `workflows/` folder. Then type the filename into the Workflow field in the extension settings. See `workflows/README.md` for the full list of placeholders and instructions. ComfyInject only touches the nodes where you place its placeholders — everything else in your workflow stays exactly as you have it.
 
 ---
 
@@ -322,11 +390,30 @@ Yes! The marker approach works with any LLM that can follow structured output in
 
 ---
 
+### Can I have multiple images per message?
+
+Yes! The LLM can include as many `[[IMG: ... ]]` markers as you want in a single message. Each marker generates a separate image sequentially. Adjust your system prompt to tell the LLM how many images to include per message.
+
+---
+
+### What do the lock settings do?
+
+The lock settings let you override specific parameters regardless of what the LLM outputs:
+
+- **Lock Resolution** — forces a single fixed resolution for all generations, ignoring the LLM's AR token.
+- **Lock Shot** — forces a single shot type for all generations, ignoring the LLM's SHOT token.
+- **Lock Seed** — forces a seed mode (RANDOM, LOCK, or a specific number) for all generations, ignoring the LLM's SEED token.
+
+The LLM still outputs its tokens normally — the locks just override them at generation time. The gallery shows what was actually sent to ComfyUI so you can verify.
+
+---
+
 ### Why isn't my image generating?
 
 A few things to check:
 - Make sure ComfyUI is running and `--enable-cors-header` is enabled
 - Make sure the Checkpoint field in ComfyInject's settings matches your model filename exactly, including the file extension
+- Make sure the Workflow field points to a valid workflow JSON in the `workflows/` folder
 - Check the browser console for any error messages from ComfyInject
 - Make sure your LLM is outputting the marker in the correct format — see the [Marker Format](#marker-format) section
 

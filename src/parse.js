@@ -9,8 +9,11 @@ const VALID_SHOT = new Set(["CLOSE", "MEDIUM", "WIDE", "DUTCH", "OVERHEAD", "LOW
 const DEFAULT_AR   = "PORTRAIT";
 const DEFAULT_SHOT = "WIDE";
 
-// Regex to match [[IMG: ... ]] — captures everything inside
+// Regex to match [[IMG: ... ]] — captures everything inside (non-global, for single match)
 export const MARKER_REGEX = /\[\[IMG:\s*(.+?)\s*\]\]/s;
+
+// Global version for finding all markers in a message
+const MARKER_REGEX_GLOBAL = /\[\[IMG:\s*(.+?)\s*\]\]/gs;
 
 /**
  * Checks whether a message string contains an [[IMG: ... ]] marker.
@@ -22,29 +25,18 @@ export function hasImageMarker(text) {
 }
 
 /**
- * Parses the [[IMG: ... ]] marker from a message, resolves all values,
- * triggers image generation, and returns the result.
- *
- * Falls back to defaults if AR or SHOT are invalid rather than aborting,
- * so a slightly malformed marker still produces an image.
- *
- * @param {string} text - Raw message text containing the marker
- * @returns {Promise<{imageUrl: string, seed: number, prompt: string} | null>}
- *          Returns null if no marker is found or parsing fails fatally.
+ * Parses the inner content of a single [[IMG: ... ]] marker into its components.
+ * Does NOT trigger generation — just validates and resolves values.
+ * @param {string} innerContent - The text between [[IMG: and ]]
+ * @param {number} messageIndex - The message index (needed for LOCK seed resolution)
+ * @returns {{ prompt: string, ar: string, shot: string, seed: number } | null}
  */
-export async function processImageMarker(text) {
-    const match = text.match(MARKER_REGEX);
-
-    if (!match) {
-        console.warn("[ComfyInject] processImageMarker called but no marker found");
-        return null;
-    }
-
+function parseMarkerContent(innerContent, messageIndex) {
     // Split the inner content by | into exactly 4 segments
-    const segments = match[1].split("|").map(s => s.trim());
+    const segments = innerContent.split("|").map(s => s.trim());
 
     if (segments.length !== 4) {
-        console.warn(`[ComfyInject] Marker has ${segments.length} segment(s), expected 4. Aborting.`);
+        console.warn(`[ComfyInject] Marker has ${segments.length} segment(s), expected 4. Skipping.`);
         return null;
     }
 
@@ -52,7 +44,7 @@ export async function processImageMarker(text) {
 
     // Validate prompt — if empty we really can't do anything useful
     if (!rawPrompt) {
-        console.warn("[ComfyInject] Marker has an empty prompt. Aborting.");
+        console.warn("[ComfyInject] Marker has an empty prompt. Skipping.");
         return null;
     }
 
@@ -71,20 +63,56 @@ export async function processImageMarker(text) {
     }
 
     // Resolve seed — handles RANDOM, LOCK, and integer strings
-    const seed = resolveSeed(rawSeed.toUpperCase());
+    const seed = resolveSeed(rawSeed.toUpperCase(), messageIndex);
 
-    console.log(`[ComfyInject] Parsed marker — prompt: "${rawPrompt}" | AR: ${ar} | SHOT: ${shot} | seed: ${seed}`);
+    return { prompt: rawPrompt, ar, shot, seed };
+}
 
-    // Generate the image via ComfyUI
-    const result = await generateImage({
-        prompt: rawPrompt,
-        ar,
-        shot,
-        seed,
-    });
+/**
+ * Finds ALL [[IMG: ... ]] markers in a message, processes them sequentially,
+ * and returns an array of results.
+ *
+ * @param {string} text - Raw message text potentially containing multiple markers
+ * @param {number} messageIndex - The index of the message being processed
+ * @returns {Promise<Array<{imageUrl: string, seed: number, prompt: string, ar: string, shot: string}>>}
+ */
+export async function processAllImageMarkers(text, messageIndex) {
+    const matches = [...text.matchAll(MARKER_REGEX_GLOBAL)];
 
-    // Save the seed that was actually used so LOCK works on the next message
-    saveLastSeed(result.seed);
+    if (matches.length === 0) {
+        console.warn("[ComfyInject] processAllImageMarkers called but no markers found");
+        return [];
+    }
 
-    return result;
+    const results = [];
+
+    for (const match of matches) {
+        const parsed = parseMarkerContent(match[1], messageIndex);
+        if (!parsed) continue;
+
+        const { prompt, ar, shot, seed } = parsed;
+
+        console.log(`[ComfyInject] Parsed marker ${results.length + 1}/${matches.length} — prompt: "${prompt}" | AR: ${ar} | SHOT: ${shot} | seed: ${seed}`);
+
+        try {
+            const result = await generateImage({
+                prompt,
+                ar,
+                shot,
+                seed,
+                messageIndex,
+            });
+
+            // Save the seed that was actually used so LOCK works
+            saveLastSeed(result.seed);
+
+            results.push({ ...result, ar, shot });
+        } catch (err) {
+            console.error(`[ComfyInject] Image generation failed for marker ${results.length + 1}:`, err);
+            // Push null so the index stays aligned with the marker positions
+            results.push(null);
+        }
+    }
+
+    return results;
 }

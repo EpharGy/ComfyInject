@@ -14,8 +14,20 @@ export const defaultSettings = Object.freeze({
     // Example: "v1-5-pruned-emaonly.ckpt" or "dreamshaper_8.safetensors"
     checkpoint: "v1-5-pruned-emaonly-fp16.safetensors",
 
+    // --- Workflow ---
+    // The filename of the workflow JSON in the workflows folder.
+    workflow: "comfyinject_default.json",
+
     // --- Negative Prompt ---
     negative_prompt: "worst quality, low quality, blurry, deformed, ugly, extra limbs",
+
+    // --- Prepend Prompt ---
+    // Custom tags prepended to every positive prompt before the LLM's output.
+    prepend_prompt: "",
+
+    // --- Append Prompt ---
+    // Custom tags appended to every positive prompt after the LLM's output.
+    append_prompt: "",
 
     // --- Sampler Settings ---
     steps: 24,
@@ -32,6 +44,23 @@ export const defaultSettings = Object.freeze({
         LANDSCAPE: { width: 768,  height: 512 },
         CINEMA:    { width: 768,  height: 432 },
     },
+
+    // --- Resolution Lock ---
+    // When enabled, ignores the LLM's AR token and uses this resolution for everything.
+    resolution_lock_enabled: false,
+    resolution_lock: { width: 512, height: 768 },
+
+    // --- Shot Lock ---
+    // When enabled, ignores the LLM's SHOT token and uses this shot type for everything.
+    shot_lock_enabled: false,
+    shot_lock: "MEDIUM",
+
+    // --- Seed Lock ---
+    // When enabled, ignores the LLM's SEED token and uses this seed mode for everything.
+    // seed_lock_mode can be "RANDOM", "LOCK", or "CUSTOM".
+    seed_lock_enabled: false,
+    seed_lock_mode: "RANDOM",
+    seed_lock_value: 0,
 
     // --- Shot Tags ---
     // Danbooru-style tags prepended to the positive prompt for each SHOT token.
