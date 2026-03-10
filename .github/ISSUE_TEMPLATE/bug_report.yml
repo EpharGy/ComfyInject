@@ -64,7 +64,7 @@ body:
       description: Press F12 → Console tab in your browser and paste errors here
       render: shell
 
-  - type: textarea
+  - type: upload
     id: screenshots
     attributes:
       label: Screenshots
