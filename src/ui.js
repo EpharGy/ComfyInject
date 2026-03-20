@@ -116,6 +116,7 @@ function updateSeedLockUI(locked) {
     $("#comfyinject_seed_lock_custom_input").toggle(locked && mode === "CUSTOM");
 }
 
+
 /**
  * Populates all input fields from current settings.
  */
@@ -187,6 +188,9 @@ function populateUI() {
     $("#comfyinject_seed_lock_mode").val(settings.seed_lock_mode);
     $("#comfyinject_seed_lock_value").val(settings.seed_lock_value);
     updateSeedLockUI(settings.seed_lock_enabled);
+
+    // Marker repair notifications
+    $("#comfyinject_repair_toast_mode").val(settings.repair_toast_mode || "failures");
 
     // Populate shot tags
     const shotContainer = $("#comfyinject_shot_tags");
@@ -407,6 +411,7 @@ function wireEvents() {
         $("#comfyinject_seed_lock_block").toggle();
     });
 
+
     // Seed lock — toggle
     $("#comfyinject_seed_lock_enabled").on("change", function () {
         const locked = $(this).prop("checked");
@@ -426,6 +431,12 @@ function wireEvents() {
     // Seed lock — custom value
     $("#comfyinject_seed_lock_value").on("input", function () {
         getSettings().seed_lock_value = parseInt($(this).val(), 10);
+        saveSettings();
+    });
+
+    // Marker repair notifications
+    $("#comfyinject_repair_toast_mode").on("change", function () {
+        getSettings().repair_toast_mode = $(this).val();
         saveSettings();
     });
 

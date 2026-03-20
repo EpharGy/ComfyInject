@@ -5,7 +5,7 @@
   "optional": [],
   "js": "index.js",
   "author": "K",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "homePage": "https://github.com/Spadic21/ComfyInject",
   "description": "Parses [[IMG: ... ]] markers and injects ComfyUI images into chat.",
   "auto_update": false,

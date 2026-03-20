@@ -11,12 +11,37 @@ let lastSeed = null;
  * Key can be a send_date string (new) or a numeric index (old/legacy).
  * @param {object} metadata - The chatMetadata[MODULE_NAME] object
  * @param {string|number} key - The metadata key (send_date or legacy index)
- * @returns {Array<{seed: number, ar?: string, shot?: string, promptId?: string, filename?: string}>}
+ * @returns {Array<object>}
  */
 export function getImageData(metadata, key) {
     const data = metadata?.[key];
     if (!data) return [];
     return Array.isArray(data) ? data : [data];
+}
+
+/**
+ * Extracts the most recent seed from the currently saved <img> tags in a message.
+ * This is used as a fallback for newer chats where seed is no longer stored in metadata.
+ * Walks backward so the most recent image in the message wins.
+ * @param {object} message - A SillyTavern chat message object
+ * @returns {number|null} The parsed seed from the last saved image tag, or null if none found
+ */
+function getSeedFromMessageMes(message) {
+    if (!message?.mes || typeof message.mes !== "string") return null;
+
+    const imgTags = [...message.mes.matchAll(/<img class="comfyinject-image"[^>]*>/g)];
+    if (imgTags.length === 0) return null;
+
+    for (let i = imgTags.length - 1; i >= 0; i--) {
+        const tag = imgTags[i][0];
+        const seedMatch = tag.match(/data-seed="([^"]*)"/);
+        const parsedSeed = parseInt(seedMatch?.[1], 10);
+        if (Number.isFinite(parsedSeed)) {
+            return parsedSeed;
+        }
+    }
+
+    return null;
 }
 
 /**
@@ -39,12 +64,35 @@ function getLastSavedSeed(currentIndex) {
         const message = context.chat[i];
         if (!message) continue;
 
-        // Try send_date key first (new format), then index key (legacy)
-        const key = message.send_date || i;
-        const images = getImageData(metadata, key);
+        // First try metadata seed lookup.
+        // This remains authoritative for legacy chats because older <img> tags
+        // may contain the LLM-written seed instead of the actual seed used.
+        let images = getImageData(metadata, message.send_date);
+
+        if (images.length === 0) {
+            images = getImageData(metadata, i);
+        }
+
         if (images.length > 0) {
-            // Use the seed from the last image in the message
-            return images[images.length - 1].seed;
+            // Walk backward through the saved image metadata for this message
+            // so null entries or malformed objects do not crash LOCK lookup.
+            // Accept both numeric seeds and numeric strings for backward compatibility.
+            for (let j = images.length - 1; j >= 0; j--) {
+                const image = images[j];
+                if (!image || typeof image !== "object") continue;
+
+                const parsedSeed = parseInt(image.seed, 10);
+                if (Number.isFinite(parsedSeed)) {
+                    return parsedSeed;
+                }
+            }
+        }
+
+        // Fall back to the currently saved <img> tags in message.mes.
+        // This supports newer chats where seed is no longer stored in metadata.
+        const mesSeed = getSeedFromMessageMes(message);
+        if (mesSeed !== null) {
+            return mesSeed;
         }
     }
 
@@ -67,7 +115,8 @@ export function resolveSeed(seed, currentIndex) {
     }
 
     if (seed === "LOCK") {
-        // Try metadata first — this is the authoritative source
+        // Try the last saved seed from prior messages.
+        // This prefers metadata for legacy chats, then falls back to saved <img> tags.
         if (currentIndex !== undefined) {
             const savedSeed = getLastSavedSeed(currentIndex);
             if (savedSeed !== null) return savedSeed;
@@ -101,10 +150,10 @@ export function saveLastSeed(seed) {
 }
 
 /**
- * Generates a random integer seed in ComfyUI's expected range.
+ * Generates a random integer seed in the project-wide seed range.
  * @returns {number}
  */
 function generateRandomSeed() {
-    // ComfyUI accepts seeds up to 2^32 - 1
-    return Math.floor(Math.random() * 4294967295);
+    // Use the project-wide max safe integer seed range.
+    return Math.floor(Math.random() * 9007199254740991);
 }

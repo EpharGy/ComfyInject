@@ -29,6 +29,127 @@ function findIndexBySendDate(sendDate) {
 }
 
 /**
+ * Returns the current marker repair toast mode.
+ * @returns {"all" | "failures" | "off"}
+ */
+function getRepairToastMode() {
+    return SillyTavern.getContext().extensionSettings[MODULE_NAME]?.repair_toast_mode || "failures";
+}
+
+/**
+ * Returns true if a repairMeta object contains any meaningful repair info.
+ * Non-canonical formatting alone does not count unless something was actually
+ * defaulted, ignored, or flagged.
+ * @param {object|null} repairMeta
+ * @returns {boolean}
+ */
+function hasMeaningfulRepair(repairMeta) {
+    if (!repairMeta || typeof repairMeta !== "object") return false;
+
+    const defaulted = Array.isArray(repairMeta.defaulted) ? repairMeta.defaulted : [];
+    const duplicateTokens = repairMeta.duplicateTokens || {};
+
+    const duplicateAr = Array.isArray(duplicateTokens.AR) ? duplicateTokens.AR : [];
+    const duplicateShot = Array.isArray(duplicateTokens.SHOT) ? duplicateTokens.SHOT : [];
+    const duplicateSeed = Array.isArray(duplicateTokens.SEED) ? duplicateTokens.SEED : [];
+
+    return (
+        defaulted.length > 0 ||
+        duplicateAr.length > 0 ||
+        duplicateShot.length > 0 ||
+        duplicateSeed.length > 0 ||
+        repairMeta.possibleSeedInPrompt === true
+    );
+}
+
+/**
+ * Shows a grouped repair toast for one live-rendered message.
+ * This is only used for successful repaired markers.
+ * @param {number} repairedCount
+ * @param {number} totalCount
+ */
+function maybeShowGroupedRepairToast(repairedCount, totalCount) {
+    if (getRepairToastMode() !== "all") return;
+    if (repairedCount <= 0) return;
+
+    toastr.warning(
+        `Repaired ${repairedCount}/${totalCount} markers in this message. See Image Gallery for details.`,
+        "ComfyInject"
+    );
+}
+
+/**
+ * Logs a grouped repair warning for one live-rendered message.
+ * This mirrors the user-facing grouped repair toast.
+ * @param {number} messageIndex
+ * @param {number} repairedCount
+ * @param {number} totalCount
+ */
+function maybeLogGroupedRepairWarning(messageIndex, repairedCount, totalCount) {
+    if (getRepairToastMode() !== "all") return;
+    if (repairedCount <= 0) return;
+
+    console.warn("[ComfyInject] Repaired markers in message:", {
+        messageIndex,
+        repairedCount,
+        totalCount,
+    });
+}
+
+/**
+ * Shows a parse-failure toast based on the user's marker repair toast setting.
+ * @param {string} errorText
+ */
+function maybeShowParseFailureToast(errorText) {
+    const mode = getRepairToastMode();
+    if (mode === "off") return;
+
+    toastr.warning(errorText, "ComfyInject");
+}
+
+/**
+ * Shows one bulk-scan repair summary toast after scanning old messages.
+ * This avoids spamming one toast per message during chat load.
+ * @param {number} repairedMessages
+ * @param {number} repairedMarkers
+ */
+function maybeShowBulkRepairSummaryToast(repairedMessages, repairedMarkers) {
+    if (getRepairToastMode() !== "all") return;
+    if (repairedMarkers <= 0) return;
+
+    toastr.warning(
+        `Repaired ${repairedMarkers} markers across ${repairedMessages} existing messages. See Image Gallery for details.`,
+        "ComfyInject"
+    );
+}
+
+/**
+ * Logs one bulk-scan repair summary warning after scanning old messages.
+ * @param {number} repairedMessages
+ * @param {number} repairedMarkers
+ */
+function maybeLogBulkRepairSummaryWarning(repairedMessages, repairedMarkers) {
+    if (getRepairToastMode() !== "all") return;
+    if (repairedMarkers <= 0) return;
+
+    console.warn("[ComfyInject] Repaired markers during bulk scan:", {
+        repairedMessages,
+        repairedMarkers,
+    });
+}
+
+/**
+ * Formats a marker position label within a message.
+ * Only includes numbering when the message had multiple markers.
+ * @param {number} markerNumber - 1-based marker number within the message
+ * @param {number} totalMarkers - Total markers in the message
+ * @returns {string}
+ */
+function formatMarkerPosition(markerNumber, totalMarkers) {
+    return totalMarkers > 1 ? ` ${markerNumber}/${totalMarkers}` : "";
+}
+
+/**
  * Adds retry buttons to all rendered comfyinject images in a message.
  * This is done via DOM manipulation (not in message.mes) because
  * ST's HTML sanitizer strips custom divs when rendering messages.
@@ -97,18 +218,19 @@ function addAllRetryButtons() {
  * saves metadata keyed by send_date, and calls saveChat().
  * @param {number} index - The message index in the chat array
  */
-async function processMessage(index) {
+async function processMessage(index, options = {}) {
     const context = SillyTavern.getContext();
     const message = context.chat[index];
     const { updateMessageBlock } = SillyTavern.getContext();
+    const { suppressRepairNotifications = false } = options;
 
-    if (!message) return;
+    if (!message) return { repairedCount: 0, totalCount: 0 };
 
     // Only process bot messages
-    if (message.is_user) return;
+    if (message.is_user) return { repairedCount: 0, totalCount: 0 };
 
     // Skip if no marker present
-    if (!hasImageMarker(message.mes)) return;
+    if (!hasImageMarker(message.mes)) return { repairedCount: 0, totalCount: 0 };
 
     console.log(`[ComfyInject] Processing message ${index}`);
 
@@ -132,20 +254,112 @@ async function processMessage(index) {
     // Process all markers sequentially
     const results = await processAllImageMarkers(message.mes, index);
 
-    if (results.length === 0) return;
+    if (results.length === 0) return { repairedCount: 0, totalCount: 0 };
 
-    // Replace each marker with its image tag (or error), one at a time
+    // Replace each marker with either a generated image or a structured error state.
+    // Only successful generations should be saved into metadata.
     const metadataArray = [];
-    for (const result of results) {
-        if (result) {
-            const { imageUrl, seed, prompt, ar, shot, promptId, filename, effectiveAr, effectiveShot, resolution, shotTags } = result;
+    let repairedCount = 0;
+
+    for (let markerIndex = 0; markerIndex < results.length; markerIndex++) {
+        const result = results[markerIndex];
+        const markerNumber = markerIndex + 1;
+        const markerPosition = formatMarkerPosition(markerNumber, results.length);
+
+        if (result?.status === "ok") {
+            const {
+                imageUrl,
+                seed,
+                prompt,
+                ar,
+                shot,
+                promptId,
+                filename,
+                effectiveAr,
+                effectiveShot,
+                resolution,
+                shotTags,
+                repairMeta,
+            } = result;
+
+            if (hasMeaningfulRepair(repairMeta)) {
+                repairedCount++;
+            }
+
             const imgTag = buildImgTag(imageUrl, prompt, seed);
             message.mes = message.mes.replace(MARKER_REGEX, imgTag);
-            metadataArray.push({ seed, ar, shot, promptId, filename, effectiveAr, effectiveShot, resolution, shotTags });
+            metadataArray.push({
+                ar,
+                shot,
+                promptId,
+                filename,
+                effectiveAr,
+                effectiveShot,
+                resolution,
+                shotTags,
+                repairMeta,
+            });
+        } else if (result?.status === "parse_error") {
+            // The marker was found, but parsing could not recover a usable prompt.
+            const reason = result?.reason;
+            let errorText;
+            switch (reason) {
+                case "empty_prompt":
+                    errorText = `[Image marker${markerPosition} invalid: empty prompt]`;
+                    break;
+                case "empty_marker":
+                    errorText = `[Image marker${markerPosition} invalid: empty marker]`;
+                    break;
+                default:
+                    errorText = `[Image marker${markerPosition} invalid]`;
+                    break;
+            }
+
+            console.warn("[ComfyInject] Image marker parse failed:", {
+                reason,
+                rawMarker: result?.rawMarker || null,
+                messageIndex: index,
+                markerNumber,
+                totalMarkers: results.length,
+            });
+
+            if (!suppressRepairNotifications) {
+                maybeShowParseFailureToast(errorText);
+            }
+
+            message.mes = message.mes.replace(
+                MARKER_REGEX,
+                `<span class="comfyinject-error">${errorText}</span>`
+            );
+        } else if (result?.status === "generation_error") {
+            // Marker parsed successfully, but image generation failed.
+            const errorText = `[Image generation failed${markerPosition ? `: marker${markerPosition}` : ""}]`;
+
+            console.error("[ComfyInject] Image generation failed:", {
+                messageIndex: index,
+                markerNumber,
+                totalMarkers: results.length,
+            });
+
+            message.mes = message.mes.replace(
+                MARKER_REGEX,
+                `<span class="comfyinject-error">${errorText}</span>`
+            );
         } else {
-            // Generation failed for this marker — replace with error text
-            message.mes = message.mes.replace(MARKER_REGEX, `<span class="comfyinject-error">[Image generation failed]</span>`);
-            metadataArray.push(null);
+            // Fallback guard for any unexpected result shape.
+            const errorText = `[Image generation failed${markerPosition ?`: marker${markerPosition}` : ""}]`;
+
+            console.error("[ComfyInject] Unexpected marker result shape:", {
+                result,
+                messageIndex: index,
+                markerNumber,
+                totalMarkers: results.length,
+            });
+
+            message.mes = message.mes.replace(
+                MARKER_REGEX,
+                `<span class="comfyinject-error">${errorText}</span>`
+            );
         }
     }
 
@@ -170,7 +384,18 @@ async function processMessage(index) {
     await context.saveMetadata();
     await context.saveChat();
 
-    console.log(`[ComfyInject] Message ${index} saved with ${results.filter(Boolean).length} injected image(s)`);
+    if (!suppressRepairNotifications) {
+        maybeShowGroupedRepairToast(repairedCount, results.length);
+        maybeLogGroupedRepairWarning(index, repairedCount, results.length);
+    }
+
+    const successCount = results.filter((result) => result?.status === "ok").length;
+    console.log(`[ComfyInject] Message ${index} saved with ${successCount} injected image(s)`);
+
+    return {
+        repairedCount,
+        totalCount: results.length,
+    };
 }
 
 /**
@@ -184,12 +409,23 @@ async function scanExistingMessages() {
 
     console.log(`[ComfyInject] Scanning ${context.chat.length} existing messages`);
 
+    let repairedMessages = 0;
+    let repairedMarkers = 0;
+
     for (let i = 0; i < context.chat.length; i++) {
         const message = context.chat[i];
         if (!message.is_user && hasImageMarker(message.mes)) {
-            await processMessage(i);
+            const summary = await processMessage(i, { suppressRepairNotifications: true });
+
+            if (summary?.repairedCount > 0) {
+                repairedMessages++;
+                repairedMarkers += summary.repairedCount;
+            }
         }
     }
+
+    maybeShowBulkRepairSummaryToast(repairedMessages, repairedMarkers);
+    maybeLogBulkRepairSummaryWarning(repairedMessages, repairedMarkers);
 
     // Add retry buttons to all already-rendered images (including ones from previous sessions)
     addAllRetryButtons();
@@ -229,8 +465,13 @@ async function retryImage(sendDate, imgIndex) {
 
     const { ar, shot } = imageData;
 
-    // Generate a new random seed
-    const newSeed = Math.floor(Math.random() * 4294967295);
+    // Fall back to the same marker-level defaults used by the parser
+    // if metadata is missing or incomplete.
+    const retryAr = ar || "SQUARE";
+    const retryShot = shot || "MEDIUM";
+
+    // Generate a new random seed using the shared project-wide max safe integer range.
+    const newSeed = Math.floor(Math.random() * 9007199254740991);
 
     // Show generating state on the retry button
     const retryBtn = document.querySelector(`.comfyinject-retry[data-senddate="${sendDate}"][data-imgindex="${imgIndex}"]`);
@@ -243,8 +484,8 @@ async function retryImage(sendDate, imgIndex) {
     try {
         result = await generateImage({
             prompt,
-            ar: ar || "PORTRAIT",
-            shot: shot || "WIDE",
+            ar: retryAr,
+            shot: retryShot,
             seed: newSeed,
             messageIndex,
             bypassSeedLock: true,
@@ -265,13 +506,43 @@ async function retryImage(sendDate, imgIndex) {
     // Save the seed that was actually used so LOCK works
     saveLastSeed(effectiveSeed);
 
-    // Update metadata — try send_date key first, fall back to index for legacy
+    // Update metadata — try send_date key first, fall back to index for legacy.
+    // Guard against missing or malformed entries so retry does not recreate bad metadata.
     const metaKey = metadata[sendDate] ? sendDate : messageIndex;
     const metaEntry = metadata[metaKey];
+
     if (Array.isArray(metaEntry)) {
-        metaEntry[imgIndex] = { ...metaEntry[imgIndex], seed: effectiveSeed, promptId, filename, effectiveAr, effectiveShot, resolution, shotTags };
-    } else if (metaEntry) {
-        metadata[metaKey] = { ...metaEntry, seed: effectiveSeed, promptId, filename, effectiveAr, effectiveShot, resolution, shotTags };
+        const existingEntry = metaEntry[imgIndex] && typeof metaEntry[imgIndex] === "object"
+            ? metaEntry[imgIndex]
+            : {};
+
+        metaEntry[imgIndex] = {
+            ...existingEntry,
+            seed: effectiveSeed,
+            ar: existingEntry.ar || retryAr,
+            shot: existingEntry.shot || retryShot,
+            promptId,
+            filename,
+            effectiveAr,
+            effectiveShot,
+            resolution,
+            shotTags,
+            repairMeta: existingEntry.repairMeta || null,
+        };
+    } else if (metaEntry && typeof metaEntry === "object") {
+        metadata[metaKey] = {
+            ...metaEntry,
+            seed: effectiveSeed,
+            ar: metaEntry.ar || retryAr,
+            shot: metaEntry.shot || retryShot,
+            promptId,
+            filename,
+            effectiveAr,
+            effectiveShot,
+            resolution,
+            shotTags,
+            repairMeta: metaEntry.repairMeta || null,
+        };
     }
 
     // Replace the Nth img tag in mes (where N = imgIndex)

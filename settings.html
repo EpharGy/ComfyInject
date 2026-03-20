@@ -231,13 +231,26 @@
                                 id="comfyinject_seed_lock_value"
                                 class="text_pole"
                                 min="0"
-                                max="4294967295"
+                                max="9007199254740991"
                                 step="1"
                                 style="width: 150px;"
                             />
                         </div>
                     </div>
                 </div>
+
+                <hr class="sysHR" />
+
+                <!-- Marker Repair Notifications -->
+                <div class="flex-container flexGap5 alignItemsCenter">
+                    <label for="comfyinject_repair_toast_mode">Marker Repair Notifications</label>
+                    <select id="comfyinject_repair_toast_mode" class="text_pole">
+                        <option value="all">All repairs</option>
+                        <option value="failures">Parse failures only</option>
+                        <option value="off">Off</option>
+                    </select>
+                </div>
+                <small>Controls toast notifications for repaired or invalid image markers.</small>
 
                 <hr class="sysHR" />
 
