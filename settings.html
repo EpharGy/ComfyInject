@@ -231,7 +231,7 @@
                                 id="comfyinject_seed_lock_value"
                                 class="text_pole"
                                 min="0"
-                                max="4294967295"
+                                max="9007199254740991"
                                 step="1"
                                 style="width: 150px;"
                             />
@@ -241,68 +241,16 @@
 
                 <hr class="sysHR" />
 
-                <!-- Marker Defaults -->
-                <div class="flex-container flexGap5">
-                    <div id="comfyinject_marker_defaults_toggle" class="menu_button menu_button_icon">
-                        <i class="fa-solid fa-wand-magic-sparkles"></i>
-                        <span>Marker Defaults</span>
-                    </div>
+                <!-- Marker Repair Notifications -->
+                <div class="flex-container flexGap5 alignItemsCenter">
+                    <label for="comfyinject_repair_toast_mode">Marker Repair Notifications</label>
+                    <select id="comfyinject_repair_toast_mode" class="text_pole">
+                        <option value="all">All repairs</option>
+                        <option value="failures">Parse failures only</option>
+                        <option value="off">Off</option>
+                    </select>
                 </div>
-
-                <div id="comfyinject_marker_defaults_block" style="display:none;">
-                    <small>Fallback values used when marker fields are missing or out of order.</small>
-                    <br />
-
-                    <div class="flex-container flexGap5 alignItemsCenter" style="margin-top: 8px;">
-                        <label style="width: 80px;" for="comfyinject_default_ar">Default AR</label>
-                        <select id="comfyinject_default_ar" class="text_pole" style="width: 170px;">
-                            <option value="RANDOM">RANDOM</option>
-                            <option value="PORTRAIT">PORTRAIT</option>
-                            <option value="SQUARE">SQUARE</option>
-                            <option value="LANDSCAPE">LANDSCAPE</option>
-                            <option value="CINEMA">CINEMA</option>
-                        </select>
-                    </div>
-
-                    <div class="flex-container flexGap5 alignItemsCenter" style="margin-top: 6px;">
-                        <label style="width: 80px;" for="comfyinject_default_shot">Default SHOT</label>
-                        <select id="comfyinject_default_shot" class="text_pole" style="width: 170px;">
-                            <option value="RANDOM">RANDOM</option>
-                            <option value="CLOSE">CLOSE</option>
-                            <option value="MEDIUM">MEDIUM</option>
-                            <option value="WIDE">WIDE</option>
-                            <option value="DUTCH">DUTCH</option>
-                            <option value="OVERHEAD">OVERHEAD</option>
-                            <option value="LOWANGLE">LOWANGLE</option>
-                            <option value="HIGHANGLE">HIGHANGLE</option>
-                            <option value="PROFILE">PROFILE</option>
-                            <option value="BACKVIEW">BACKVIEW</option>
-                            <option value="POV">POV</option>
-                        </select>
-                    </div>
-
-                    <div class="flex-container flexGap5 alignItemsCenter" style="margin-top: 6px;">
-                        <label style="width: 80px;" for="comfyinject_default_seed_mode">Default SEED</label>
-                        <select id="comfyinject_default_seed_mode" class="text_pole" style="width: 170px;">
-                            <option value="RANDOM">RANDOM</option>
-                            <option value="LOCK">LOCK</option>
-                            <option value="CUSTOM">CUSTOM</option>
-                        </select>
-                    </div>
-
-                    <div id="comfyinject_default_seed_custom_input" class="flex-container flexGap5 alignItemsCenter" style="margin-top: 6px; display:none;">
-                        <label style="width: 80px;" for="comfyinject_default_seed_value">Seed</label>
-                        <input
-                            type="number"
-                            id="comfyinject_default_seed_value"
-                            class="text_pole"
-                            min="0"
-                            max="1125899906842624"
-                            step="1"
-                            style="width: 170px;"
-                        />
-                    </div>
-                </div>
+                <small>Controls toast notifications for repaired or invalid image markers.</small>
 
                 <hr class="sysHR" />
 

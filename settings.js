@@ -66,12 +66,12 @@ export const defaultSettings = Object.freeze({
     seed_lock_mode: "RANDOM",
     seed_lock_value: 0,
 
-    // --- Marker Defaults ---
-    // Used when marker segments are missing or out-of-order.
-    // AR/SHOT accept RANDOM plus valid tokens; SEED accepts RANDOM, LOCK, or integer.
-    default_ar: "RANDOM",
-    default_shot: "RANDOM",
-    default_seed: "RANDOM",
+    // --- Marker Repair Notifications ---
+    // Controls when parser repair toasts are shown.
+    // "all" = successful repaired markers + parse failures
+    // "failures" = parse failures only
+    // "off" = no marker repair toasts
+    repair_toast_mode: "failures",
 
     // --- Shot Tags ---
     // Danbooru-style tags prepended to the positive prompt for each SHOT token.

@@ -2,6 +2,24 @@ import { MODULE_NAME } from "../settings.js";
 import { getImageData } from "./state.js";
 
 /**
+ * Returns true if the image has any repair metadata worth surfacing in the UI.
+ * @param {object | null} repairMeta
+ * @returns {boolean}
+ */
+function hasRepairInfo(repairMeta) {
+    if (!repairMeta || typeof repairMeta !== "object") return false;
+
+    const defaulted = Array.isArray(repairMeta.defaulted) ? repairMeta.defaulted : [];
+    const duplicateTokens = repairMeta.duplicateTokens || {};
+    const duplicateCount =
+        (Array.isArray(duplicateTokens.AR) ? duplicateTokens.AR.length : 0) +
+        (Array.isArray(duplicateTokens.SHOT) ? duplicateTokens.SHOT.length : 0) +
+        (Array.isArray(duplicateTokens.SEED) ? duplicateTokens.SEED.length : 0);
+
+    return defaulted.length > 0 || duplicateCount > 0 || repairMeta.possibleSeedInPrompt === true;
+}
+
+/**
  * Opens the image gallery modal showing all generated images in the current chat.
  * Images are displayed as thumbnails with seeds. Clicking expands to full detail view.
  */
@@ -14,7 +32,8 @@ export function openGallery() {
 
     // Collect all images by scanning the actual current mes content of each message.
     // This ensures the gallery always matches what's on screen regardless of swipe state.
-    // Metadata is used as supplementary info for extra fields like ar, shot, promptId.
+    // Metadata is used as supplementary info for extra fields like ar, shot,
+    // promptId, and parser repair metadata.
     const allImages = [];
     const imgTagRegex = /<img class="comfyinject-image"[^>]*>/g;
     const srcRegex = /src="([^"]*)"/;
@@ -28,9 +47,8 @@ export function openGallery() {
         const imgTags = [...message.mes.matchAll(imgTagRegex)];
         if (imgTags.length === 0) continue;
 
-        const metaImages = message.send_date && getImageData(metadata, message.send_date).length > 0
-            ? getImageData(metadata, message.send_date)
-            : getImageData(metadata, i);
+        const sendDateImages = message.send_date ? getImageData(metadata, message.send_date) : [];
+        const metaImages = sendDateImages.length > 0 ? sendDateImages : getImageData(metadata, i);
 
         imgTags.forEach((match, imgIndex) => {
             const tag = match[0];
@@ -38,7 +56,8 @@ export function openGallery() {
             const prompt = tag.match(promptRegex)?.[1]?.replace(/&quot;/g, '"') || "";
             const seed = parseInt(tag.match(seedRegex)?.[1], 10) || 0;
 
-            // Metadata is supplementary — only use it for extra fields (ar, shot, promptId)
+            // Metadata is supplementary — only use it for extra fields
+            // like ar, shot, promptId, effective settings, and repair metadata.
             // and only if the seed matches the current img tag (avoids stale swipe data)
             const meta = metaImages[imgIndex] || {};
             const metaMatches = meta.seed === seed;
@@ -55,6 +74,7 @@ export function openGallery() {
                 effectiveShot: metaMatches ? (meta.effectiveShot || null) : null,
                 resolution: metaMatches ? (meta.resolution || null) : null,
                 shotTags: metaMatches ? (meta.shotTags || null) : null,
+                repairMeta: metaMatches ? (meta.repairMeta || null) : null,
                 messageIndex: i,
                 imgIndex,
             });
@@ -133,6 +153,32 @@ export function openGallery() {
         `;
 
         card.appendChild(thumb);
+
+        // Show a small badge if the marker was repaired/defaulted during parsing.
+        if (hasRepairInfo(img.repairMeta)) {
+            const badge = document.createElement("div");
+            badge.title = "This image used repaired/defaulted marker fields";
+            badge.textContent = "⚠";
+            badge.style.cssText = `
+                position: absolute;
+                top: 8px;
+                left: 8px;
+                width: 22px;
+                height: 22px;
+                border-radius: 999px;
+                background: rgba(255, 170, 0, 0.9);
+                color: black;
+                font-weight: bold;
+                font-size: 13px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+            `;
+            card.style.position = "relative";
+            card.appendChild(badge);
+        }
+
         card.appendChild(info);
 
         // Click to expand
@@ -258,6 +304,82 @@ function showDetail(img, overlay) {
     }
 
     detail.appendChild(infoTable);
+
+    // Repair info block
+    if (hasRepairInfo(img.repairMeta)) {
+        const repairMeta = img.repairMeta || {};
+        const defaulted = Array.isArray(repairMeta.defaulted) ? repairMeta.defaulted : [];
+        const duplicateTokens = repairMeta.duplicateTokens || {};
+
+        const repairSection = document.createElement("div");
+        repairSection.style.cssText = `
+            margin-top: 16px;
+            background: rgba(255, 170, 0, 0.08);
+            border: 1px solid rgba(255, 170, 0, 0.25);
+            border-radius: 8px;
+            padding: 16px;
+            color: white;
+        `;
+
+        const title = document.createElement("div");
+        title.style.cssText = "font-weight: bold; margin-bottom: 10px; color: #ffcc66;";
+        title.textContent = "Repair Info";
+        repairSection.appendChild(title);
+
+        const repairList = document.createElement("div");
+        repairList.style.cssText = `
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 8px 16px;
+            font-size: 13px;
+        `;
+
+        const rows = [
+            [
+                "Defaulted",
+                defaulted.length > 0 ? defaulted.join(", ") : "None",
+            ],
+            [
+                "Duplicate AR",
+                Array.isArray(duplicateTokens.AR) && duplicateTokens.AR.length > 0
+                    ? duplicateTokens.AR.join(", ")
+                    : "None",
+            ],
+            [
+                "Duplicate SHOT",
+                Array.isArray(duplicateTokens.SHOT) && duplicateTokens.SHOT.length > 0
+                    ? duplicateTokens.SHOT.join(", ")
+                    : "None",
+            ],
+            [
+                "Duplicate SEED",
+                Array.isArray(duplicateTokens.SEED) && duplicateTokens.SEED.length > 0
+                    ? duplicateTokens.SEED.join(", ")
+                    : "None",
+            ],
+            [
+                "Possible Seed In Prompt",
+                repairMeta.possibleSeedInPrompt ? "Yes" : "No",
+            ],
+        ];
+
+        for (const [label, value] of rows) {
+            const labelEl = document.createElement("span");
+            labelEl.style.cssText = "color: #d9b15c; font-weight: bold; white-space: nowrap;";
+            labelEl.textContent = label;
+
+            const valueEl = document.createElement("span");
+            valueEl.style.cssText = "color: #eee; word-break: break-word;";
+            valueEl.textContent = value;
+
+            repairList.appendChild(labelEl);
+            repairList.appendChild(valueEl);
+        }
+
+        repairSection.appendChild(repairList);
+        detail.appendChild(repairSection);
+    }
+
     overlay.appendChild(detail);
 }
 

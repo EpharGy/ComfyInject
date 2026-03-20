@@ -1,31 +1,41 @@
 import { generateImage } from "./comfy.js";
 import { resolveSeed, saveLastSeed } from "./state.js";
-import { MODULE_NAME } from "../settings.js";
 
-// Valid values for AR and SHOT tokens
-const VALID_AR   = new Set(["PORTRAIT", "SQUARE", "LANDSCAPE", "CINEMA"]);
-const VALID_SHOT = new Set(["CLOSE", "MEDIUM", "WIDE", "DUTCH", "OVERHEAD", "LOWANGLE", "HIGHANGLE", "PROFILE", "BACKVIEW", "POV"]);
-const AR_TOKENS = [...VALID_AR];
-const SHOT_TOKENS = [...VALID_SHOT];
+// Valid AR control tokens.
+// These must match exactly and stay case-sensitive.
+const VALID_AR = new Set(["PORTRAIT", "SQUARE", "LANDSCAPE", "CINEMA"]);
 
-// Hard fallback defaults if settings are unavailable
-const DEFAULT_AR   = "PORTRAIT";
-const DEFAULT_SHOT = "WIDE";
+// Valid SHOT control tokens.
+// These must match exactly and stay case-sensitive.
+const VALID_SHOT = new Set([
+    "CLOSE",
+    "MEDIUM",
+    "WIDE",
+    "DUTCH",
+    "OVERHEAD",
+    "LOWANGLE",
+    "HIGHANGLE",
+    "PROFILE",
+    "BACKVIEW",
+    "POV",
+]);
+
+// Marker-level fallback values.
+// These are only used when the marker does not provide a usable value.
+// Final generation can still be overridden later by locks.
+const DEFAULT_AR = "SQUARE";
+const DEFAULT_SHOT = "MEDIUM";
 const DEFAULT_SEED = "RANDOM";
 
-// Prevent toast spam in messages with many repaired markers
-let lastRepairToastAt = 0;
-const REPAIR_TOAST_COOLDOWN_MS = 3000;
-
-// Regex to match [[IMG: ... ]] — captures everything inside (non-global, for single match)
+// Regex to match a single [[IMG: ... ]] marker.
 export const MARKER_REGEX = /\[\[IMG:\s*(.+?)\s*\]\]/s;
 
-// Global version for finding all markers in a message
+// Global regex to find all markers in a message.
 const MARKER_REGEX_GLOBAL = /\[\[IMG:\s*(.+?)\s*\]\]/gs;
 
 /**
- * Checks whether a message string contains an [[IMG: ... ]] marker.
- * @param {string} text - Raw message text
+ * Returns true if the message contains at least one image marker.
+ * @param {string} text
  * @returns {boolean}
  */
 export function hasImageMarker(text) {
@@ -33,72 +43,309 @@ export function hasImageMarker(text) {
 }
 
 /**
- * Parses the inner content of a single [[IMG: ... ]] marker into its components.
- * Does NOT trigger generation — just validates and resolves values.
- * @param {string} innerContent - The text between [[IMG: and ]]
- * @param {number} messageIndex - The message index (needed for LOCK seed resolution)
- * @returns {{ status: "ok", prompt: string, ar: string, shot: string, seed: number, repairMeta: {defaulted: string[], duplicatesIgnored: string[]} } | { status: "parse_error", reason: string, repairMeta: {defaulted: string[], duplicatesIgnored: string[]} }}
+ * Returns true if the value is an exact AR token.
+ * @param {string} value
+ * @returns {boolean}
  */
-function parseMarkerContent(innerContent, messageIndex) {
-    const segments = innerContent
-        .split("|")
-        .map(s => s.trim())
-        .filter(Boolean);
+function isArToken(value) {
+    return VALID_AR.has(value);
+}
 
-    const repairMeta = {
+/**
+ * Returns true if the value is an exact SHOT token.
+ * @param {string} value
+ * @returns {boolean}
+ */
+function isShotToken(value) {
+    return VALID_SHOT.has(value);
+}
+
+/**
+ * Returns true if the value is an exact SEED token.
+ * Valid seed tokens are RANDOM, LOCK, or a digits-only integer string.
+ * @param {string} value
+ * @returns {boolean}
+ */
+function isSeedToken(value) {
+    return value === "RANDOM" || value === "LOCK" || /^\d+$/.test(value);
+}
+
+/**
+ * Classifies a token candidate as AR, SHOT, SEED, or null.
+ * Matching is exact and case-sensitive.
+ * @param {string} value
+ * @returns {"AR" | "SHOT" | "SEED" | null}
+ */
+function classifyToken(value) {
+    if (isArToken(value)) return "AR";
+    if (isShotToken(value)) return "SHOT";
+    if (isSeedToken(value)) return "SEED";
+    return null;
+}
+
+/**
+ * Returns a fresh repair metadata object for one marker parse.
+ * This tracks what was defaulted, what duplicates were ignored,
+ * and any prompt warnings.
+ * @returns {{
+ *   defaulted: string[],
+ *   duplicateTokens: {
+ *     AR: string[],
+ *     SHOT: string[],
+ *     SEED: string[]
+ *   },
+ *   possibleSeedInPrompt: boolean
+ * }}
+ */
+function createRepairMeta() {
+    return {
         defaulted: [],
-        duplicatesIgnored: [],
+        duplicateTokens: {
+            AR: [],
+            SHOT: [],
+            SEED: [],
+        },
+        possibleSeedInPrompt: false,
     };
+}
 
-    const defaults = getMarkerDefaults();
-
-    const promptParts = [];
-    let ar = null;
-    let shot = null;
-    let seedToken = null;
-
-    for (const segment of segments) {
-        const upper = segment.toUpperCase();
-        const seedKind = classifySeed(upper);
-
-        if (VALID_AR.has(upper)) {
-            if (ar === null) {
-                ar = upper;
-            } else {
-                repairMeta.duplicatesIgnored.push(`AR=${upper}`);
-                console.warn(`[ComfyInject] Duplicate AR "${upper}" ignored.`);
-            }
-            continue;
+/**
+ * Records a token into parser state.
+ * First valid token wins for each field.
+ * Later duplicates are ignored and tracked in repairMeta.
+ * @param {{ ar: string | null, shot: string | null, seedToken: string | null }} state
+ * @param {"AR" | "SHOT" | "SEED"} type
+ * @param {string} value
+ * @param {ReturnType<typeof createRepairMeta>} repairMeta
+ */
+function recordToken(state, type, value, repairMeta) {
+    if (type === "AR") {
+        if (state.ar === null) {
+            state.ar = value;
+        } else {
+            repairMeta.duplicateTokens.AR.push(value);
         }
-
-        if (VALID_SHOT.has(upper)) {
-            if (shot === null) {
-                shot = upper;
-            } else {
-                repairMeta.duplicatesIgnored.push(`SHOT=${upper}`);
-                console.warn(`[ComfyInject] Duplicate SHOT "${upper}" ignored.`);
-            }
-            continue;
-        }
-
-        if (seedKind) {
-            if (seedToken === null) {
-                seedToken = upper;
-            } else {
-                repairMeta.duplicatesIgnored.push(`SEED=${upper}`);
-                console.warn(`[ComfyInject] Duplicate SEED "${upper}" ignored.`);
-            }
-            continue;
-        }
-
-        promptParts.push(segment);
+        return;
     }
 
-    const prompt = promptParts.join(", ").trim();
+    if (type === "SHOT") {
+        if (state.shot === null) {
+            state.shot = value;
+        } else {
+            repairMeta.duplicateTokens.SHOT.push(value);
+        }
+        return;
+    }
 
-    // Empty prompt is the only parser hard-fail.
+    if (type === "SEED") {
+        if (state.seedToken === null) {
+            state.seedToken = value;
+        } else {
+            repairMeta.duplicateTokens.SEED.push(value);
+        }
+    }
+}
+
+/**
+ * Optional warning only.
+ * This does NOT parse numbers out of prompt text.
+ * It only flags that the final prompt still contains a large standalone number.
+ * @param {string} prompt
+ * @returns {boolean}
+ */
+function hasPossibleSeedInPrompt(prompt) {
+    return /\b\d{4,}\b/.test(prompt);
+}
+
+/**
+ * Processes a single whitespace-separated word.
+ * At the word level, only exact uppercase control tokens are consumed.
+ * Numeric seeds are NOT consumed here, so numbers inside prompt-like text
+ * remain part of the prompt instead of being parsed as SEED.
+ * @param {string} word
+ * @param {{ ar: string | null, shot: string | null, seedToken: string | null }} state
+ * @param {ReturnType<typeof createRepairMeta>} repairMeta
+ * @returns {string}
+ */
+function processWord(word, state, repairMeta) {
+    let type = null;
+
+    if (isArToken(word)) {
+        type = "AR";
+    } else if (isShotToken(word)) {
+        type = "SHOT";
+    } else if (word === "RANDOM" || word === "LOCK") {
+        type = "SEED";
+    }
+
+    if (!type) {
+        return word;
+    }
+
+    recordToken(state, type, word, repairMeta);
+    return "";
+}
+
+/**
+ * Processes one comma-separated part of a segment.
+ *
+ * Priority:
+ * 1. If the whole part is an exact token, consume it.
+ * 2. If the whole part is digits-only, consume it as a seed token.
+ * 3. Otherwise split on whitespace and consume exact uppercase tokens word-by-word.
+ * 4. Any leftover text remains prompt content.
+ *
+ * Leftover words inside the same comma part are rejoined with spaces.
+ *
+ * @param {string} part
+ * @param {{ ar: string | null, shot: string | null, seedToken: string | null }} state
+ * @param {ReturnType<typeof createRepairMeta>} repairMeta
+ * @returns {string}
+ */
+function processCommaPart(part, state, repairMeta) {
+    const trimmed = part.trim();
+    if (!trimmed) return "";
+
+    const wholeType = classifyToken(trimmed);
+    if (wholeType) {
+        recordToken(state, wholeType, trimmed, repairMeta);
+        return "";
+    }
+
+    if (/^\d+$/.test(trimmed)) {
+        recordToken(state, "SEED", trimmed, repairMeta);
+        return "";
+    }
+
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    const leftoverWords = [];
+
+    for (const word of words) {
+        const leftover = processWord(word, state, repairMeta);
+        if (leftover) {
+            leftoverWords.push(leftover);
+        }
+    }
+
+    return leftoverWords.join(" ");
+}
+
+/**
+ * Processes one pipe-separated segment.
+ *
+ * Priority:
+ * 1. If the whole segment is an exact token, consume it.
+ * 2. If the whole segment is digits-only, consume it as a seed token.
+ * 3. Otherwise split on commas and process each comma part.
+ * 4. Any leftover text remains prompt content.
+ *
+ * Leftover comma parts inside the same segment are rejoined with commas.
+ *
+ * @param {string} segment
+ * @param {{ ar: string | null, shot: string | null, seedToken: string | null }} state
+ * @param {ReturnType<typeof createRepairMeta>} repairMeta
+ * @returns {string}
+ */
+function processSegment(segment, state, repairMeta) {
+    const trimmed = segment.trim();
+    if (!trimmed) return "";
+
+    const wholeType = classifyToken(trimmed);
+    if (wholeType) {
+        recordToken(state, wholeType, trimmed, repairMeta);
+        return "";
+    }
+
+    if (/^\d+$/.test(trimmed)) {
+        recordToken(state, "SEED", trimmed, repairMeta);
+        return "";
+    }
+
+    const commaParts = trimmed.split(",");
+    const leftoverParts = [];
+
+    for (const part of commaParts) {
+        const leftover = processCommaPart(part, state, repairMeta);
+        if (leftover) {
+            leftoverParts.push(leftover);
+        }
+    }
+
+    return leftoverParts.join(", ");
+}
+
+/**
+ * Parses one [[IMG: ... ]] marker.
+ *
+ * The marker format is a recommendation, not a hard rule.
+ * The parser scans every pipe-separated segment and tries to salvage exact
+ * uppercase control tokens from whole segments, comma parts, and words.
+ *
+ * Whatever is not consumed as AR / SHOT / SEED remains prompt text.
+ * Prompt leftovers from different pipe segments are rejoined with commas.
+ *
+ * @param {string} innerContent
+ * @param {number} messageIndex
+ * @returns {{
+ *   status: "ok",
+ *   prompt: string,
+ *   ar: string,
+ *   shot: string,
+ *   seed: number,
+ *   repairMeta: {
+ *     defaulted: string[],
+ *     duplicateTokens: {
+ *       AR: string[],
+ *       SHOT: string[],
+ *       SEED: string[]
+ *     },
+ *     possibleSeedInPrompt: boolean
+ *   }
+ * } | {
+ *   status: "parse_error",
+ *   reason: string,
+ *   repairMeta: {
+ *     defaulted: string[],
+ *     duplicateTokens: {
+ *       AR: string[],
+ *       SHOT: string[],
+ *       SEED: string[]
+ *     },
+ *     possibleSeedInPrompt: boolean
+ *   }
+ * }}
+ */
+function parseMarkerContent(innerContent, messageIndex) {
+    const rawSegments = innerContent.split("|");
+    const repairMeta = createRepairMeta();
+    if (!innerContent.trim()) {
+        return {
+            status: "parse_error",
+            reason: "empty_marker",
+            repairMeta,
+        };
+    }
+
+    const state = {
+        ar: null,
+        shot: null,
+        seedToken: null,
+    };
+
+    const promptSegments = [];
+
+    for (const rawSegment of rawSegments) {
+        const leftover = processSegment(rawSegment, state, repairMeta);
+        if (leftover) {
+            promptSegments.push(leftover);
+        }
+    }
+
+    // Leftover text from different pipe segments becomes one final prompt.
+    // Pipes are marker syntax only, so they should not appear in the prompt sent to ComfyUI.
+    const prompt = promptSegments.join(", ").trim();
+
     if (!prompt) {
-        console.warn("[ComfyInject] Marker invalid: empty prompt.");
         return {
             status: "parse_error",
             reason: "empty_prompt",
@@ -106,19 +353,27 @@ function parseMarkerContent(innerContent, messageIndex) {
         };
     }
 
+    if (hasPossibleSeedInPrompt(prompt)) {
+        repairMeta.possibleSeedInPrompt = true;
+    }
+
+    let ar = state.ar;
+    let shot = state.shot;
+    let seedToken = state.seedToken;
+
     if (ar === null) {
-        ar = defaults.ar;
-        repairMeta.defaulted.push(`AR=${ar}`);
+        ar = DEFAULT_AR;
+        repairMeta.defaulted.push("AR");
     }
 
     if (shot === null) {
-        shot = defaults.shot;
-        repairMeta.defaulted.push(`SHOT=${shot}`);
+        shot = DEFAULT_SHOT;
+        repairMeta.defaulted.push("SHOT");
     }
 
     if (seedToken === null) {
-        seedToken = defaults.seed;
-        repairMeta.defaulted.push(`SEED=${seedToken}`);
+        seedToken = DEFAULT_SEED;
+        repairMeta.defaulted.push("SEED");
     }
 
     const seed = resolveSeed(seedToken, messageIndex);
@@ -133,97 +388,92 @@ function parseMarkerContent(innerContent, messageIndex) {
     };
 }
 
-function classifySeed(value) {
-    if (value === "RANDOM" || value === "LOCK") return value;
-    if (/^\d+$/.test(value)) return "INTEGER";
-    return null;
-}
-
-function chooseRandom(list) {
-    return list[Math.floor(Math.random() * list.length)];
-}
-
-function getMarkerDefaults() {
-    const settings = getSettings();
-
-    const rawAr = String(settings.default_ar ?? DEFAULT_AR).toUpperCase();
-    const rawShot = String(settings.default_shot ?? DEFAULT_SHOT).toUpperCase();
-    const rawSeed = String(settings.default_seed ?? DEFAULT_SEED).toUpperCase();
-
-    const ar = rawAr === "RANDOM"
-        ? chooseRandom(AR_TOKENS)
-        : (VALID_AR.has(rawAr) ? rawAr : DEFAULT_AR);
-
-    const shot = rawShot === "RANDOM"
-        ? chooseRandom(SHOT_TOKENS)
-        : (VALID_SHOT.has(rawShot) ? rawShot : DEFAULT_SHOT);
-
-    const seed = classifySeed(rawSeed) ? rawSeed : DEFAULT_SEED;
-
-    return { ar, shot, seed };
-}
-
-function getSettings() {
-    const context = globalThis.SillyTavern?.getContext?.();
-    const settings = context?.extensionSettings?.[MODULE_NAME] ?? {};
-    return settings;
-}
-
-function maybeShowRepairToast(markerIndex, repairMeta) {
-    if (!repairMeta.defaulted.length) return;
-
-    const now = Date.now();
-    if (now - lastRepairToastAt < REPAIR_TOAST_COOLDOWN_MS) return;
-    lastRepairToastAt = now;
-
-    const msg = `Repaired marker #${markerIndex}: defaulted ${repairMeta.defaulted.join(", ")}`;
-    if (globalThis.toastr?.warning) {
-        globalThis.toastr.warning(msg, "ComfyInject");
-    }
-}
-
 /**
- * Finds ALL [[IMG: ... ]] markers in a message, processes them sequentially,
- * and returns an array of results.
+ * Finds all image markers in a message, parses them one by one,
+ * and returns structured results for DOM handling.
  *
- * @param {string} text - Raw message text potentially containing multiple markers
- * @param {number} messageIndex - The index of the message being processed
- * @returns {Promise<Array<{status: "ok", imageUrl: string, seed: number, prompt: string, ar: string, shot: string} | {status: "parse_error", reason: string} | {status: "generation_error"}>>}
+ * Success:
+ *   { status: "ok", ... }
+ *
+ * Parse failure:
+ *   { status: "parse_error", reason, repairMeta, rawMarker }
+ *
+ * Generation failure:
+ *   { status: "generation_error", repairMeta, rawMarker }
+ *
+ * @param {string} text
+ * @param {number} messageIndex
+ * @returns {Promise<Array<
+ *   | {
+ *       status: "ok",
+ *       imageUrl: string,
+ *       seed: number,
+ *       prompt: string,
+ *       promptId: string,
+ *       filename: string,
+ *       effectiveAr: string,
+ *       effectiveShot: string,
+ *       resolution: { width: number, height: number },
+ *       shotTags: string,
+ *       ar: string,
+ *       shot: string,
+ *       repairMeta: {
+ *         defaulted: string[],
+ *         duplicateTokens: {
+ *           AR: string[],
+ *           SHOT: string[],
+ *           SEED: string[]
+ *         },
+ *         possibleSeedInPrompt: boolean
+ *       }
+ *     }
+ *   | {
+ *       status: "parse_error",
+ *       reason: string,
+ *       repairMeta: {
+ *         defaulted: string[],
+ *         duplicateTokens: {
+ *           AR: string[],
+ *           SHOT: string[],
+ *           SEED: string[]
+ *         },
+ *         possibleSeedInPrompt: boolean
+ *       },
+ *       rawMarker: string
+ *     }
+ *   | {
+ *       status: "generation_error",
+ *       repairMeta: {
+ *         defaulted: string[],
+ *         duplicateTokens: {
+ *           AR: string[],
+ *           SHOT: string[],
+ *           SEED: string[]
+ *         },
+ *         possibleSeedInPrompt: boolean
+ *       },
+ *       rawMarker: string
+ *     }
+ * >>}
  */
 export async function processAllImageMarkers(text, messageIndex) {
     const matches = [...text.matchAll(MARKER_REGEX_GLOBAL)];
-
-    if (matches.length === 0) {
-        console.warn("[ComfyInject] processAllImageMarkers called but no markers found");
-        return [];
-    }
+    if (matches.length === 0) return [];
 
     const results = [];
 
-    for (let markerIdx = 0; markerIdx < matches.length; markerIdx++) {
-        const match = matches[markerIdx];
+    for (const match of matches) {
         const parsed = parseMarkerContent(match[1], messageIndex);
-        const markerNumber = markerIdx + 1;
 
-        if (!parsed || parsed.status === "parse_error") {
+        if (parsed.status === "parse_error") {
             results.push({
-                status: "parse_error",
-                reason: parsed?.reason ?? "unknown",
+                ...parsed,
+                rawMarker: match[0],
             });
             continue;
         }
 
         const { prompt, ar, shot, seed, repairMeta } = parsed;
-
-        if (repairMeta.defaulted.length || repairMeta.duplicatesIgnored.length) {
-            const details = [];
-            if (repairMeta.defaulted.length) details.push(`defaulted=[${repairMeta.defaulted.join(", ")}]`);
-            if (repairMeta.duplicatesIgnored.length) details.push(`duplicates_ignored=[${repairMeta.duplicatesIgnored.join(", ")}]`);
-            console.warn(`[ComfyInject] Marker ${markerNumber} repaired: ${details.join(" ")} -> (${ar}, ${shot}, ${seed})`);
-            maybeShowRepairToast(markerNumber, repairMeta);
-        }
-
-        console.log(`[ComfyInject] Parsed marker ${markerNumber}/${matches.length} - prompt: "${prompt}" | AR: ${ar} | SHOT: ${shot} | seed: ${seed}`);
 
         try {
             const result = await generateImage({
@@ -234,13 +484,22 @@ export async function processAllImageMarkers(text, messageIndex) {
                 messageIndex,
             });
 
-            // Save the seed that was actually used so LOCK works
+            // Save the actual used seed so LOCK can reuse it later.
             saveLastSeed(result.seed);
 
-            results.push({ status: "ok", ...result, ar, shot });
-        } catch (err) {
-            console.error(`[ComfyInject] Image generation failed for marker ${markerNumber}:`, err);
-            results.push({ status: "generation_error" });
+            results.push({
+                status: "ok",
+                ...result,
+                ar,
+                shot,
+                repairMeta,
+            });
+        } catch {
+            results.push({
+                status: "generation_error",
+                repairMeta,
+                rawMarker: match[0],
+            });
         }
     }
 

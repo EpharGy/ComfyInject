@@ -4,7 +4,7 @@
 
 A SillyTavern extension that automatically generates images from `[[IMG: ... ]]` markers in bot messages using your local ComfyUI instance.
 
-When your LLM outputs a marker, ComfyInject intercepts it, sends the prompt to ComfyUI, and replaces the marker with the generated image — all without leaving the chat. Multiple images per message are supported. Images are saved permanently into the chat history and survive page reloads. Outbound prompts sent to the LLM replace injected images with a compact token so the model maintains visual continuity across the conversation.
+When your LLM outputs a marker, ComfyInject intercepts it, sends the prompt to ComfyUI, and replaces the marker with the generated image, all without leaving the chat. Multiple images per message are supported. Images are saved permanently into the chat history and survive page reloads. Outbound prompts sent to the LLM replace injected images with a compact token so the model maintains visual continuity across the conversation.
 
 <details>
   <summary>Table of Contents</summary>
@@ -114,7 +114,7 @@ All other settings have sensible defaults and don't need to be changed to get st
 ComfyInject won't generate anything unless your LLM knows to output the `[[IMG: ... ]]` marker format.
 
 - **To get up and running fast:** copy the ready-made prompt from the [System Prompt](#system-prompt) section and paste it into your character's Post-History Instructions (Author's Note in ST).
-- **To write your own:** see the [Marker Format](#marker-format) section for the full spec.
+- **To write your own:** see the [Marker Format](#marker-format) section for the recommended format and parser behavior.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -165,15 +165,13 @@ All settings are available in the Extensions panel in SillyTavern under **ComfyI
 |---|---|
 | `Shot Tags` | Danbooru tags prepended to the prompt for each SHOT token. Fully customizable. |
 
-### Marker Defaults
+### Marker Repair Notifications
 
 | Setting | Description |
 |---|---|
-| `Default AR` | Fallback AR when marker AR is missing/invalid. Can be `RANDOM` or a fixed AR token. |
-| `Default SHOT` | Fallback SHOT when marker SHOT is missing/invalid. Can be `RANDOM` or a fixed SHOT token. |
-| `Default SEED` | Fallback SEED when marker SEED is missing/invalid. Modes: `RANDOM`, `LOCK`, or `CUSTOM` integer. |
+| `Marker Repair Notifications` | Controls toast notifications for repaired or invalid markers. `All repairs` shows successful repaired markers and parse failures. `Parse failures only` shows only invalid markers. `Off` disables marker repair toasts. |
 
-When `Lock Seed` is enabled, it still takes precedence over marker/default SEED behavior.
+ComfyInject still repairs many malformed markers automatically even when toast notifications are disabled. Full repair details remain visible in the Image Gallery.
 
 > **Note for SDXL users:** Default resolutions are SD1.5 sized (512px). Bump them up — e.g. PORTRAIT to 832x1216.
 
@@ -185,7 +183,7 @@ To reset all advanced settings back to defaults while keeping your host, checkpo
 
 ## Marker Format
 
-Instruct your LLM to output image markers using this exact format:
+The recommended marker format is:
 
 ```
 [[IMG: PROMPT | AR | SHOT | SEED ]]
@@ -194,10 +192,11 @@ Instruct your LLM to output image markers using this exact format:
 Multiple markers per message are supported — each one generates a separate image.
 
 ComfyInject uses a lenient parser:
-- Missing AR/SHOT/SEED fields are auto-filled from **Marker Defaults**.
-- AR/SHOT/SEED can be out of order and are detected by token type.
-- Duplicate AR/SHOT/SEED fields keep the first value and ignore later duplicates.
-- The only parser hard-fail is an empty prompt, shown as `[Image marker invalid: empty prompt]`.
+- Missing AR, SHOT, or SEED fields are auto-filled with built-in parser defaults.
+- AR, SHOT, and SEED can be out of order and are detected by token type.
+- Duplicate AR, SHOT, or SEED fields keep the first value and ignore later duplicates.
+- Large standalone numbers left inside prompt text are preserved and flagged in repair metadata as a possible seed-in-prompt warning.
+- The main parser hard-fails are markers that resolve to an empty prompt or an empty marker body.
 
 ### Segments
 
@@ -218,7 +217,7 @@ ComfyInject uses a lenient parser:
 
 **SHOT** — Camera shot type. Each token prepends Danbooru tags to the positive prompt automatically:
 
-| Token | Tags injected |
+| Token | Tags injected (default) |
 |---|---|
 | `CLOSE` | `close-up, face focus` |
 | `MEDIUM` | `upper body` |
@@ -256,6 +255,8 @@ To change these tags, open the Extensions panel → ComfyInject → **Advanced S
 Add the following to your **Post-History Instructions** (You can also place it in **Author's Note**, **Prompt Content**, or even in your **Summary** if that's what you want!). Placing it there puts it closer to the end of the context window, which gives significantly better format compliance than a top-level system prompt.
 
 The example below tells the LLM to include one image per message. You can change the number to whatever you want, or tell it to include images "when narratively appropriate" for more flexibility.
+
+This prompt teaches the LLM the canonical format. ComfyInject can repair many malformed markers, but better compliance still gives more predictable results.
 
 ```
 IMAGE INJECTION RULES
@@ -300,7 +301,7 @@ If any segment is invalid or missing, regenerate the entire marker before contin
 Never explain or mention the marker in narration.
 ```
 
-> **Model recommendations:** Larger models (70B+) or cloud APIs like DeepSeek V3.2 follow the format far more reliably than small local models. Models under 13B tend to produce inconsistent markers and hallucinate character details.
+> **Model recommendations:** Larger models (70B+) or cloud APIs like DeepSeek V3.2 follow the format far more reliably than small local models. Models under 13B tend to produce inconsistent markers and hallucinate character details. However, with update v0.3.0, many of the previously rejected markers from smaller models will now parse correctly and produce an image regardless. 
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -313,11 +314,16 @@ ComfyInject includes a built-in image gallery accessible from the extension pane
 The gallery shows all generated images in the current chat as a grid of thumbnails. Each thumbnail displays the seed and message number. Click any image to expand it and see the full details:
 
 - **Seed** — the numeric seed used for generation
-- **Prompt** — the full Danbooru tag prompt the LLM wrote
-- **AR** — the aspect ratio token and actual resolution used (shows `LOCKED` if resolution lock was active)
-- **Shot** — the shot type token and actual tags injected (shows `LOCKED` if shot lock was active)
+- **Prompt** — the final prompt sent for generation after parsing salvages and token extraction
+- **AR** — the aspect ratio token and actual resolution used
+- **Shot** — the shot type token and actual tags injected
 - **Filename** — the output filename in ComfyUI's output folder
 - **Prompt ID** — the ComfyUI job ID, clickable as a link to the ComfyUI history endpoint for debugging
+
+If an image marker was repaired during parsing, the thumbnail shows a warning badge. In the detail view, a Repair Info section shows:
+- which fields were defaulted
+- which duplicate AR / SHOT / SEED tokens were ignored
+- whether a possible seed remained in the prompt
 
 The gallery always reflects what's currently on screen — swiping to a different response updates the gallery accordingly.
 
@@ -350,11 +356,11 @@ To use your own workflow, see `workflows/README.md` for placeholder requirements
 ## How It Works
 
 1. Bot message arrives containing one or more `[[IMG: ... ]]` markers
-2. ComfyInject parses each marker and resolves seeds, applying any active locks
+2. ComfyInject parses each marker, salvages misplaced control tokens when possible, applies built-in fallbacks for missing fields, and resolves seeds while applying any active locks
 3. For each marker, the workflow is filled with your settings and sent to ComfyUI sequentially
 4. ComfyInject polls `/history` until each image is ready
 5. Each marker is replaced with an `<img>` tag in the chat permanently
-6. Image metadata (seed, AR, shot, prompt ID, filename) is saved to chat metadata keyed by message timestamp for stability across deletions
+6. Image metadata (AR, shot, prompt ID, filename, effective settings, and repair metadata) is saved to chat metadata keyed by message timestamp for stability across deletions
 7. On the next generation, the outbound interceptor replaces `<img>` tags with `[[IMG: prompt | seed ]]` tokens so the LLM sees a compact text reference instead of raw HTML
 8. Retry buttons are injected via DOM manipulation after each render
 
@@ -431,6 +437,9 @@ A few things to check:
 - Make sure the Checkpoint field in ComfyInject's settings matches your model filename exactly, including the file extension
 - Make sure the Workflow field points to a valid workflow JSON in the `workflows/` folder
 - Check the browser console for any error messages from ComfyInject
+- If the marker resolves to an empty prompt or empty marker body, ComfyInject will replace it inline with a parse error instead of generating an image
+- For successful repaired markers, check the Image Gallery for repair details
+- For failed markers, check the browser console for parse or generation failure details, including the original failed marker when available
 - Make sure your LLM is outputting the marker in the correct format — see the [Marker Format](#marker-format) section
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
